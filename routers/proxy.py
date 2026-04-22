@@ -1,6 +1,7 @@
 import logging
 from typing import Optional
 
+import httpx
 from fastapi import APIRouter, Request, HTTPException, Header
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -178,3 +179,82 @@ async def validate_project(
     from services.vertex_auth import validate_project_id
     allowed = validate_project_id(project_id)
     return {"project_id": project_id, "allowed": allowed}
+
+
+# ── RSS / HTTP Fetch 代理 ───────────────────────────────────────────────────────
+
+class FetchRequest(BaseModel):
+    url: str = Field(..., description="要抓取的 URL")
+    timeout: int = Field(15, ge=5, le=60, description="超时秒数，默认15秒")
+    headers: Optional[dict[str, str]] = Field(
+        default=None,
+        description="可选的额外请求头",
+    )
+
+
+class FetchResponse(BaseModel):
+    url: str
+    status: int
+    content: str
+    error: Optional[str] = None
+
+
+@router.post("/fetch", response_model=FetchResponse)
+async def relay_fetch(
+    request: Request,
+    body: FetchRequest,
+    x_api_key: Optional[str] = Header(None),
+):
+    """
+    HTTP GET 代理端点，供 ECS 抓取外网 RSS 源使用。
+    EC2 可以访问外网，承担所有出站 HTTP 请求。
+
+    请求示例：
+    ```json
+    {
+      "url": "https://nitter.net/karpathy/rss",
+      "timeout": 15,
+      "headers": {"User-Agent": "Mozilla/5.0 ..."}
+    }
+    ```
+
+    响应示例：
+    ```json
+    {
+      "url": "https://nitter.net/karpathy/rss",
+      "status": 200,
+      "content": "<?xml ...",
+      "error": null
+    }
+    ```
+    """
+    _verify_api_key(x_api_key)
+
+    if rate_limited := check_rate_limit(request, "fetch"):
+        raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
+
+    headers = body.headers or {}
+    if "User-Agent" not in headers:
+        headers["User-Agent"] = headers.get(
+            "User-Agent", "Mozilla/5.0 (compatible; AI-Daily/1.0)"
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(body.timeout)) as client:
+            resp = await client.get(body.url, headers=headers, follow_redirects=True)
+
+        return FetchResponse(
+            url=body.url,
+            status=resp.status_code,
+            content=resp.text,
+            error=None,
+        )
+    except httpx.TimeoutException:
+        log.warning(f"[relay_fetch] 超时 {body.url}")
+        return FetchResponse(url=body.url, status=0, content="", error="timeout")
+    except httpx.RequestError as e:
+        log.warning(f"[relay_fetch] 请求错误 {body.url}: {e}")
+        return FetchResponse(url=body.url, status=0, content="", error=str(e))
+    except Exception as e:
+        log.error(f"[relay_fetch] 未知错误 {body.url}: {e}")
+        return FetchResponse(url=body.url, status=0, content="", error=str(e))
