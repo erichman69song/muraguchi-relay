@@ -190,10 +190,6 @@ class FetchRequest(BaseModel):
         default=None,
         description="可选的额外请求头",
     )
-    proxy: Optional[str] = Field(
-        default=None,
-        description="可选的 HTTP 代理 URL，如 http://user:pass@host:port",
-    )
 
 
 class FetchResponse(BaseModel):
@@ -245,7 +241,7 @@ async def relay_fetch(
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(body.timeout)) as client:
-            resp = await client.get(body.url, headers=headers, follow_redirects=True, proxy=body.proxy)
+            resp = await client.get(body.url, headers=headers, follow_redirects=True)
 
         return FetchResponse(
             url=body.url,
