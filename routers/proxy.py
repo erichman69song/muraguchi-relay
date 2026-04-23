@@ -185,7 +185,7 @@ async def validate_project(
 
 class FetchRequest(BaseModel):
     url: str = Field(..., description="要抓取的 URL")
-    timeout: int = Field(15, ge=5, le=60, description="超时秒数，默认15秒")
+    timeout: int = Field(30, ge=5, le=120, description="超时秒数，默认30秒")
     headers: Optional[dict[str, str]] = Field(
         default=None,
         description="可选的额外请求头",
