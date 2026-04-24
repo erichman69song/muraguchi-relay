@@ -26,6 +26,7 @@ class Settings(BaseSettings):
 
     # Rate Limiting
     RATE_LIMIT_PER_MINUTE: int = 60
+    RATE_LIMIT_FETCH_PER_MINUTE: int = 300
 
     @property
     def allowed_projects_set(self) -> set[str]:

@@ -41,8 +41,12 @@ def check_rate_limit(request, endpoint: str) -> Optional[str]:
     Raises:
         RateLimitExceeded — 由 FastAPI 异常处理器处理
     """
-    limit = settings.RATE_LIMIT_PER_MINUTE
-    key = _client_key(request)
+    if endpoint == "fetch":
+        limit = settings.RATE_LIMIT_FETCH_PER_MINUTE
+    else:
+        limit = settings.RATE_LIMIT_PER_MINUTE
+    client_id = _client_key(request)
+    key = f"{client_id}:{endpoint}"
     now = time.time()
     window = 60.0
 
