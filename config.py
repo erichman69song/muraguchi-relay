@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     # GCP
     VERTEX_ALLOWED_PROJECTS: str = ""
     GCP_SERVICE_ACCOUNT_JSON_PATH: Optional[str] = None
+    DEFAULT_VERTEX_PROJECT_ID: str = "gen-lang-client-0568442340"
 
     # Providers
     OPENAI_API_KEY: str = ""

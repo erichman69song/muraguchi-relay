@@ -4,7 +4,7 @@ from typing import Any, Optional
 import httpx
 
 from config import settings
-from services.vertex_auth import call_vertex_ai, VertexAuthError
+from services.vertex_auth import call_vertex_ai, call_vertex_imagen, VertexAuthError
 
 log = logging.getLogger("router")
 
@@ -243,3 +243,36 @@ def _vertex_response_to_openai(data: dict) -> dict:
         "usage": data.get("usageMetadata", {}),
         "model": data.get("modelVersion", ""),
     }
+
+
+async def route_imagen(
+    project_id: str,
+    location: str,
+    model: str,
+    prompt: str,
+    sample_count: int = 1,
+    aspect_ratio: str = "1:1",
+    negative_prompt: str = "",
+    reference_image_url: str = "",
+    reference_image_bytes_base64: str = "",
+) -> dict:
+    """
+    异步调用 Vertex AI Imagen 图像生成并返回标准化格式。
+
+    Returns:
+        {
+            "predictions": [{"bytesBase64Encoded": "...", "mimeType": "image/png"}],
+            ...
+        }
+    """
+    return await call_vertex_imagen(
+        project_id=project_id,
+        location=location,
+        model=model,
+        prompt=prompt,
+        sample_count=sample_count,
+        aspect_ratio=aspect_ratio,
+        negative_prompt=negative_prompt,
+        reference_image_url=reference_image_url,
+        reference_image_bytes_base64=reference_image_bytes_base64,
+    )

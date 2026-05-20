@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from config import settings
-from services.router import route_chat_completion, infer_provider, RouterError
+from services.router import route_chat_completion, route_imagen, infer_provider, RouterError
 from services.rate_limit import check_rate_limit
 
 log = logging.getLogger("proxy")
@@ -258,3 +258,79 @@ async def relay_fetch(
     except Exception as e:
         log.error(f"[relay_fetch] 未知错误 {body.url}: {e}")
         return FetchResponse(url=body.url, status=0, content="", error=str(e))
+
+
+# ── Google Imagen 图像生成 ─────────────────────────────────────────────────────
+
+class ImagenRequest(BaseModel):
+    """Vertex AI Imagen 图像生成请求"""
+    project_id: Optional[str] = Field(None, description="GCP 项目 ID（默认使用环境变量配置）")
+    location: str = Field("us-central1", description="区域")
+    model: str = Field("imagegeneration@006", description="Imagen 模型名，如 imagegeneration@006, imagen-3.0-generate, imagen-3.0-fast-generate")
+    prompt: str = Field(..., description="图像描述文本")
+    sample_count: int = Field(1, ge=1, le=4, description="生成数量（1-4）")
+    aspect_ratio: str = Field("1:1", description="宽高比：1:1, 16:9, 9:16, 4:3, 3:4")
+    negative_prompt: str = Field("", description="负面提示词")
+    reference_image_url: str = Field("", description="参考图 URL（可选）")
+    reference_image_bytes_base64: str = Field("", description="参考图 base64（可选）")
+
+
+@router.post("/imagen/generate", response_model=dict)
+async def relay_imagen_generate(
+    request: Request,
+    body: ImagenRequest,
+    x_api_key: Optional[str] = Header(None),
+):
+    """
+    Google Imagen 图像生成专用 relay 端点。
+
+    EC2 在 AWS 新加坡，可以访问 Google Vertex AI。
+    ECS 在中国大陆无法直连 Google，走此 relay 中转。
+
+    请求示例：
+    ```json
+    {
+      "prompt": "A beautiful sunset over the ocean",
+      "sample_count": 1,
+      "aspect_ratio": "16:9",
+      "model": "imagegeneration@006"
+    }
+    ```
+
+    响应示例：
+    ```json
+    {
+      "predictions": [
+        {
+          "bytesBase64Encoded": "iVBORw0KGgo...",
+          "mimeType": "image/png"
+        }
+      ]
+    }
+    ```
+    """
+    _verify_api_key(x_api_key)
+
+    if rate_limited := check_rate_limit(request, "chat/completions"):
+        raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
+
+    # 使用请求中的 project_id，默认为环境变量中的项目 ID
+    project_id = body.project_id or settings.DEFAULT_VERTEX_PROJECT_ID
+
+    try:
+        result = await route_imagen(
+            project_id=project_id,
+            location=body.location,
+            model=body.model,
+            prompt=body.prompt,
+            sample_count=body.sample_count,
+            aspect_ratio=body.aspect_ratio,
+            negative_prompt=body.negative_prompt,
+            reference_image_url=body.reference_image_url,
+            reference_image_bytes_base64=body.reference_image_bytes_base64,
+        )
+        return result
+
+    except RouterError as e:
+        log.error(f"[proxy] imagen/generate 错误: {e}")
+        raise HTTPException(502, str(e))

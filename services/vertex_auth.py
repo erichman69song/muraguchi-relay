@@ -96,3 +96,80 @@ async def call_vertex_ai(
         raise VertexAuthError(f"Vertex AI 返回 {resp.status_code}: {resp.text}")
 
     return resp.json()
+
+
+async def call_vertex_imagen(
+    project_id: str,
+    location: str,
+    model: str,
+    prompt: str,
+    sample_count: int = 1,
+    aspect_ratio: str = "1:1",
+    negative_prompt: str = "",
+    reference_image_url: str = "",
+    reference_image_bytes_base64: str = "",
+) -> dict:
+    """
+    向 Vertex AI Imagen 图像生成发起请求。
+
+    Args:
+        project_id: GCP 项目 ID
+        location: 区域，如 us-central1
+        model: 模型名称，如 imagegeneration@006
+        prompt: 图像描述文本
+        sample_count: 生成图片数量（1-4）
+        aspect_ratio: 宽高比，如 16:9, 9:16, 1:1, 4:3, 3:4
+        negative_prompt: 负面提示词
+        reference_image_url: 参考图 URL（可选）
+        reference_image_bytes_base64: 参考图 base64（可选）
+
+    Returns:
+        Vertex AI Imagen 返回的完整 JSON 响应字典
+    """
+    if not validate_project_id(project_id):
+        raise VertexAuthError(f"project_id '{project_id}' 不在白名单中")
+
+    token = get_vertex_access_token()
+
+    # Imagen 使用 v1 predict 端点
+    base_url = "https://aiplatform.googleapis.com/v1"
+    endpoint = (
+        f"{base_url}/projects/{project_id}/locations/{location}/"
+        f"publishers/google/models/{model}:predict"
+    )
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    # 构建 instance（文本提示词）
+    instance: dict = {"prompt": prompt}
+
+    # 如果有参考图，添加到 instance
+    if reference_image_url:
+        instance["image"] = {"bytesBase64Encoded": reference_image_url}
+    elif reference_image_bytes_base64:
+        instance["image"] = {"bytesBase64Encoded": reference_image_bytes_base64}
+
+    # 构建 parameters
+    params: dict = {
+        "sampleCount": sample_count,
+        "aspectRatio": aspect_ratio,
+    }
+    if negative_prompt:
+        params["negativePrompt"] = negative_prompt
+
+    payload = {
+        "instances": [instance],
+        "parameters": params,
+    }
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+        resp = await client.post(endpoint, json=payload, headers=headers)
+
+    if resp.status_code != 200:
+        log.error(f"[vertex_auth] Vertex AI Imagen 错误 {resp.status_code}: {resp.text}")
+        raise VertexAuthError(f"Vertex AI Imagen 返回 {resp.status_code}: {resp.text}")
+
+    return resp.json()
