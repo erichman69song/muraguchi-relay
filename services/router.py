@@ -4,7 +4,7 @@ from typing import Any, Optional
 import httpx
 
 from config import settings
-from services.vertex_auth import call_vertex_ai, call_vertex_imagen, VertexAuthError
+from services.vertex_auth import call_vertex_ai, VertexAuthError
 
 log = logging.getLogger("router")
 
@@ -86,6 +86,7 @@ async def route_chat_completion(
     model: str,
     messages: list[dict],
     generation_config: Optional[dict] = None,
+    api_key: Optional[str] = None,
     **kwargs,
 ) -> dict:
     """
@@ -96,6 +97,7 @@ async def route_chat_completion(
         model:    模型名称
         messages: OpenAI 格式消息列表
         generation_config: 可选生成参数
+        api_key:  provider API key（ECS 传入，优先使用）
 
     Returns:
         OpenAI 格式的 chat completion 响应
@@ -107,7 +109,8 @@ async def route_chat_completion(
 
     if provider in PROVIDER_BASE_URLS:
         return await _route_rest(
-            provider, PROVIDER_BASE_URLS[provider], model, messages, gen_config
+            provider, PROVIDER_BASE_URLS[provider], model, messages, gen_config,
+            api_key=api_key,
         )
 
     raise RouterError(f"不支持的 provider: {provider}")
@@ -148,9 +151,10 @@ async def _route_rest(
     model: str,
     messages: list[dict],
     gen_config: dict,
+    api_key: Optional[str] = None,
 ) -> dict:
     """路由到 OpenAI / Anthropic / DeepSeek 等 REST API。"""
-    api_key = _get_api_key(provider)
+    api_key = _get_api_key(provider, api_key)
     if not api_key:
         raise RouterError(f"{provider} API key 未配置")
 
@@ -180,7 +184,9 @@ async def _route_rest(
     return resp.json()
 
 
-def _get_api_key(provider: str) -> str:
+def _get_api_key(provider: str, request_key: Optional[str] = None) -> str:
+    if request_key:
+        return request_key
     mapping = {
         "openai":    settings.OPENAI_API_KEY,
         "anthropic": settings.ANTHROPIC_API_KEY,
@@ -243,36 +249,3 @@ def _vertex_response_to_openai(data: dict) -> dict:
         "usage": data.get("usageMetadata", {}),
         "model": data.get("modelVersion", ""),
     }
-
-
-async def route_imagen(
-    project_id: str,
-    location: str,
-    model: str,
-    prompt: str,
-    sample_count: int = 1,
-    aspect_ratio: str = "1:1",
-    negative_prompt: str = "",
-    reference_image_url: str = "",
-    reference_image_bytes_base64: str = "",
-) -> dict:
-    """
-    异步调用 Vertex AI Imagen 图像生成并返回标准化格式。
-
-    Returns:
-        {
-            "predictions": [{"bytesBase64Encoded": "...", "mimeType": "image/png"}],
-            ...
-        }
-    """
-    return await call_vertex_imagen(
-        project_id=project_id,
-        location=location,
-        model=model,
-        prompt=prompt,
-        sample_count=sample_count,
-        aspect_ratio=aspect_ratio,
-        negative_prompt=negative_prompt,
-        reference_image_url=reference_image_url,
-        reference_image_bytes_base64=reference_image_bytes_base64,
-    )

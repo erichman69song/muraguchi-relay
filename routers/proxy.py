@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from config import settings
-from services.router import route_chat_completion, route_imagen, infer_provider, RouterError
+from services.router import route_chat_completion, infer_provider, RouterError
 from services.rate_limit import check_rate_limit
 
 log = logging.getLogger("proxy")
@@ -28,6 +28,7 @@ def _verify_api_key(x_api_key: Optional[str] = Header(None)) -> None:
 class ChatCompletionRequest(BaseModel):
     provider: str = Field(..., description="vertex | openai | anthropic | deepseek")
     model: str = Field(..., description="模型名称，如 gemini-3.1-pro-preview")
+    api_key: Optional[str] = Field(None, description="provider API key（ECS 请求方传入，优先使用）")
     project_id: Optional[str] = Field(None, description="Vertex AI 必需：GCP 项目 ID")
     location: str = Field("us-central1", description="区域，默认 us-central1")
     messages: list[dict] = Field(..., description="OpenAI 格式消息列表")
@@ -91,6 +92,7 @@ async def relay_chat_completions(
             model=body.model,
             messages=body.messages,
             generation_config=generation_config,
+            api_key=body.api_key,
             project_id=body.project_id,
             location=body.location,
         )
@@ -185,10 +187,15 @@ async def validate_project(
 
 class FetchRequest(BaseModel):
     url: str = Field(..., description="要抓取的 URL")
+    method: str = Field("GET", description="HTTP 方法: GET | POST | PUT | DELETE")
     timeout: int = Field(30, ge=5, le=120, description="超时秒数，默认30秒")
     headers: Optional[dict[str, str]] = Field(
         default=None,
         description="可选的额外请求头",
+    )
+    body: Optional[str | dict] = Field(
+        default=None,
+        description="请求体，字符串或 dict（用于 POST/PUT）",
     )
 
 
@@ -241,7 +248,14 @@ async def relay_fetch(
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(body.timeout)) as client:
-            resp = await client.get(body.url, headers=headers, follow_redirects=True)
+            req_kwargs: dict = {"headers": headers, "follow_redirects": True}
+            method = body.method.upper()
+            if method in ("POST", "PUT", "PATCH") and body.body:
+                if isinstance(body.body, dict):
+                    req_kwargs["json"] = body.body
+                else:
+                    req_kwargs["content"] = body.body
+            resp = await client.request(method, body.url, **req_kwargs)
 
         return FetchResponse(
             url=body.url,
@@ -258,79 +272,3 @@ async def relay_fetch(
     except Exception as e:
         log.error(f"[relay_fetch] 未知错误 {body.url}: {e}")
         return FetchResponse(url=body.url, status=0, content="", error=str(e))
-
-
-# ── Google Imagen 图像生成 ─────────────────────────────────────────────────────
-
-class ImagenRequest(BaseModel):
-    """Vertex AI Imagen 图像生成请求"""
-    project_id: Optional[str] = Field(None, description="GCP 项目 ID（默认使用环境变量配置）")
-    location: str = Field("us-central1", description="区域")
-    model: str = Field("imagegeneration@006", description="Imagen 模型名，如 imagegeneration@006, imagen-3.0-generate, imagen-3.0-fast-generate")
-    prompt: str = Field(..., description="图像描述文本")
-    sample_count: int = Field(1, ge=1, le=4, description="生成数量（1-4）")
-    aspect_ratio: str = Field("1:1", description="宽高比：1:1, 16:9, 9:16, 4:3, 3:4")
-    negative_prompt: str = Field("", description="负面提示词")
-    reference_image_url: str = Field("", description="参考图 URL（可选）")
-    reference_image_bytes_base64: str = Field("", description="参考图 base64（可选）")
-
-
-@router.post("/imagen/generate", response_model=dict)
-async def relay_imagen_generate(
-    request: Request,
-    body: ImagenRequest,
-    x_api_key: Optional[str] = Header(None),
-):
-    """
-    Google Imagen 图像生成专用 relay 端点。
-
-    EC2 在 AWS 新加坡，可以访问 Google Vertex AI。
-    ECS 在中国大陆无法直连 Google，走此 relay 中转。
-
-    请求示例：
-    ```json
-    {
-      "prompt": "A beautiful sunset over the ocean",
-      "sample_count": 1,
-      "aspect_ratio": "16:9",
-      "model": "imagegeneration@006"
-    }
-    ```
-
-    响应示例：
-    ```json
-    {
-      "predictions": [
-        {
-          "bytesBase64Encoded": "iVBORw0KGgo...",
-          "mimeType": "image/png"
-        }
-      ]
-    }
-    ```
-    """
-    _verify_api_key(x_api_key)
-
-    if rate_limited := check_rate_limit(request, "chat/completions"):
-        raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
-
-    # 使用请求中的 project_id，默认为环境变量中的项目 ID
-    project_id = body.project_id or settings.DEFAULT_VERTEX_PROJECT_ID
-
-    try:
-        result = await route_imagen(
-            project_id=project_id,
-            location=body.location,
-            model=body.model,
-            prompt=body.prompt,
-            sample_count=body.sample_count,
-            aspect_ratio=body.aspect_ratio,
-            negative_prompt=body.negative_prompt,
-            reference_image_url=body.reference_image_url,
-            reference_image_bytes_base64=body.reference_image_bytes_base64,
-        )
-        return result
-
-    except RouterError as e:
-        log.error(f"[proxy] imagen/generate 错误: {e}")
-        raise HTTPException(502, str(e))
