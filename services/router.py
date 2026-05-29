@@ -191,6 +191,7 @@ def _get_api_key(provider: str, request_key: Optional[str] = None) -> str:
         "openai":    settings.OPENAI_API_KEY,
         "anthropic": settings.ANTHROPIC_API_KEY,
         "deepseek":  settings.DEEPSEEK_API_KEY,
+        "google":    settings.GOOGLE_API_KEY,
     }
     return mapping.get(provider, "")
 

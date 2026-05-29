@@ -308,9 +308,13 @@ async def relay_openai_image(
     if rate_limited := check_rate_limit(request, "openai/image"):
         raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
 
-    api_key = body.api_key if hasattr(body, "api_key") and body.api_key else _get_api_key("openai")
+    # 优先用请求 body 中的 api_key（ECS DB 里的 key）
+    # 其次用 relay .env 配置的 key
+    body_dict = body.model_dump() if hasattr(body, "model_dump") else dict(body)
+    request_api_key = body_dict.get("api_key") or None
+    api_key = _get_api_key("openai", request_api_key)
     if not api_key:
-        raise HTTPException(status_code=502, detail="OpenAI API key 未配置")
+        raise HTTPException(status_code=502, detail="OpenAI API key 未配置（请求方未传且 relay 未配置）")
 
     headers = {
         "Authorization": f"Bearer {api_key}",
