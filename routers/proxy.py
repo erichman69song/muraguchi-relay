@@ -289,6 +289,7 @@ class ImageGenerateRequest(BaseModel):
 class ImageGenerateGoogleRequest(BaseModel):
     model: str = Field(default="gemini-3-pro-image-preview")
     contents: list[dict]  # Google generateContent 格式
+    api_key: Optional[str] = Field(default=None)  # ECS DB 中的 key，通过 body 传入
 
     model_config = {"extra": "allow"}
 
@@ -362,10 +363,13 @@ async def relay_google_image(
     if rate_limited := check_rate_limit(request, "google/image"):
         raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
 
-    import os
-    api_key = os.environ.get("GOOGLE_API_KEY", "")
+    # 优先用请求 body 中的 api_key（ECS DB 里的 key）
+    # 其次用 relay .env 配置的 key
+    request_api_key = getattr(body, "api_key", None) or None
+    env_api_key = os.environ.get("GOOGLE_API_KEY", "")
+    api_key = request_api_key or env_api_key
     if not api_key:
-        raise HTTPException(status_code=502, detail="Google API key 未配置")
+        raise HTTPException(status_code=502, detail="Google API key 未配置（请求方未传且 relay 未配置）")
 
     # 从请求 body 中取 model（默认 gemini-3-pro-image-preview）
     model = getattr(body, "model", "gemini-3-pro-image-preview") or "gemini-3-pro-image-preview"
