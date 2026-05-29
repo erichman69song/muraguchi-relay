@@ -281,7 +281,7 @@ class ImageGenerateRequest(BaseModel):
     prompt: str
     n: int = Field(default=1, ge=1, le=10)
     size: str = Field(default="1024x1024")
-    response_format: str = Field(default="url")  # url | b64_json
+    api_key: Optional[str] = Field(default=None)  # ECS DB 中的 key，通过 body 传入
 
     model_config = {"extra": "allow"}
 
@@ -310,8 +310,7 @@ async def relay_openai_image(
 
     # 优先用请求 body 中的 api_key（ECS DB 里的 key）
     # 其次用 relay .env 配置的 key
-    body_dict = body.model_dump() if hasattr(body, "model_dump") else dict(body)
-    request_api_key = body_dict.get("api_key") or None
+    request_api_key = getattr(body, "api_key", None) or None
     api_key = _get_api_key("openai", request_api_key)
     if not api_key:
         raise HTTPException(status_code=502, detail="OpenAI API key 未配置（请求方未传且 relay 未配置）")
@@ -325,7 +324,6 @@ async def relay_openai_image(
         "prompt": body.prompt,
         "n": body.n,
         "size": body.size,
-        "response_format": body.response_format,
     }
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
