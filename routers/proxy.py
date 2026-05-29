@@ -287,6 +287,7 @@ class ImageGenerateRequest(BaseModel):
 
 
 class ImageGenerateGoogleRequest(BaseModel):
+    model: str = Field(default="gemini-3-pro-image-preview")
     contents: list[dict]  # Google generateContent 格式
 
     model_config = {"extra": "allow"}
@@ -364,9 +365,8 @@ async def relay_google_image(
     if not api_key:
         raise HTTPException(status_code=502, detail="Google API key 未配置")
 
-    # 从请求中提取 model（通过 query param 或 body.model）
-    model = getattr(body, "model", "gemini-3-pro-image-preview")
-    model = model or "gemini-3-pro-image-preview"
+    # 从请求 body 中取 model（默认 gemini-3-pro-image-preview）
+    model = getattr(body, "model", "gemini-3-pro-image-preview") or "gemini-3-pro-image-preview"
 
     base_url = "https://generativelanguage.googleapis.com"
     url = f"{base_url}/v1beta/models/{model}:generateContent"
