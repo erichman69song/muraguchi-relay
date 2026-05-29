@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
     DEEPSEEK_API_KEY: str = ""
+    GOOGLE_API_KEY: str = ""
 
     # Access Control
     ALLOWED_CLIENT_IPS: str = ""

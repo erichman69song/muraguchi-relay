@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from config import settings
-from services.router import route_chat_completion, infer_provider, RouterError
+from services.router import route_chat_completion, infer_provider, RouterError, PROVIDER_BASE_URLS, _get_api_key
 from services.rate_limit import check_rate_limit
 
 log = logging.getLogger("proxy")
@@ -272,3 +272,126 @@ async def relay_fetch(
     except Exception as e:
         log.error(f"[relay_fetch] 未知错误 {body.url}: {e}")
         return FetchResponse(url=body.url, status=0, content="", error=str(e))
+
+
+# ── 图片生成专用代理 ────────────────────────────────────────────────────────────
+
+class ImageGenerateRequest(BaseModel):
+    model: str
+    prompt: str
+    n: int = Field(default=1, ge=1, le=10)
+    size: str = Field(default="1024x1024")
+    response_format: str = Field(default="url")  # url | b64_json
+
+    model_config = {"extra": "allow"}
+
+
+class ImageGenerateGoogleRequest(BaseModel):
+    contents: list[dict]  # Google generateContent 格式
+
+    model_config = {"extra": "allow"}
+
+
+@router.post("/openai/image", response_model=dict)
+async def relay_openai_image(
+    request: Request,
+    body: ImageGenerateRequest,
+    x_api_key: Optional[str] = Header(None),
+):
+    """
+    OpenAI / GPT-Image 代理端点（走 /v1/images/generations）。
+    通过 relay 代为转发，EC2 可访问 OpenAI API。
+    """
+    _verify_api_key(x_api_key)
+
+    if rate_limited := check_rate_limit(request, "openai/image"):
+        raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
+
+    api_key = body.api_key if hasattr(body, "api_key") and body.api_key else _get_api_key("openai")
+    if not api_key:
+        raise HTTPException(status_code=502, detail="OpenAI API key 未配置")
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": body.model,
+        "prompt": body.prompt,
+        "n": body.n,
+        "size": body.size,
+        "response_format": body.response_format,
+    }
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+        resp = await client.post(
+            f"{PROVIDER_BASE_URLS['openai']}/images/generations",
+            json=payload,
+            headers=headers,
+        )
+
+    if resp.status_code != 200:
+        # 返回原始错误 body（可能是 JSON 或纯文本）
+        try:
+            err_json = resp.json()
+            raise HTTPException(status_code=502, detail=f"OpenAI image error: {err_json}")
+        except Exception:
+            raise HTTPException(
+                status_code=502,
+                detail=f"OpenAI image error HTTP {resp.status_code}: {resp.text[:500]}",
+            )
+
+    return resp.json()
+
+
+@router.post("/google/image", response_model=dict)
+async def relay_google_image(
+    request: Request,
+    body: ImageGenerateGoogleRequest,
+    x_api_key: Optional[str] = Header(None),
+):
+    """
+    Google Imagen / Gemini Image 代理端点（走 generateContent）。
+    通过 relay 代为转发，EC2 可访问 Google API。
+    """
+    _verify_api_key(x_api_key)
+
+    if rate_limited := check_rate_limit(request, "google/image"):
+        raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
+
+    import os
+    api_key = os.environ.get("GOOGLE_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=502, detail="Google API key 未配置")
+
+    # 从请求中提取 model（通过 query param 或 body.model）
+    model = getattr(body, "model", "gemini-3-pro-image-preview")
+    model = model or "gemini-3-pro-image-preview"
+
+    base_url = "https://generativelanguage.googleapis.com"
+    url = f"{base_url}/v1beta/models/{model}:generateContent"
+
+    headers = {
+        "Content-Type": "application/json",
+    }
+    params = {"key": api_key}
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+        resp = await client.post(
+            url,
+            json=body.contents,
+            headers=headers,
+            params=params,
+        )
+
+    if resp.status_code != 200:
+        try:
+            err_json = resp.json()
+            raise HTTPException(status_code=502, detail=f"Google image error: {err_json}")
+        except Exception:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Google image error HTTP {resp.status_code}: {resp.text[:500]}",
+            )
+
+    return resp.json()
