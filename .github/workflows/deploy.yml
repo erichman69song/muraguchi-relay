@@ -20,8 +20,6 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           port: 22
           timeout: 120s
-          command_timeout: 120
-          envs: GITHUB_SHA
           script: |
             export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
             cd /home/ubuntu/relay
