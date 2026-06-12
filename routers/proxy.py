@@ -378,10 +378,6 @@ async def relay_google_image(
     base_url = "https://generativelanguage.googleapis.com"
     url = f"{base_url}/v1beta/models/{model}:generateContent"
 
-<<<<<<< HEAD
-    headers = {
-        "Content-Type": "application/json",
-    }
     headers = {
         "Content-Type": "application/json",
     }
