@@ -22,7 +22,7 @@ jobs:
           timeout: 120s
           script: |
             export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
-            cd /home/ubuntu/relay
+            cd /opt/muraguchi-relay
             git fetch origin
             git reset --hard origin/main
             echo "Code updated to $(git rev-parse --short HEAD)"
@@ -32,15 +32,15 @@ jobs:
               echo "Restarting via systemd..."
               systemctl --user restart muraguchi-relay
             else
-              echo "Restarting via pkill + python..."
-              pkill -f "uvicorn relay_server:app" || true
+              echo "Restarting via pkill + python (venv)..."
+              pkill -f "relay_server:app" || true
               sleep 1
-              nohup python -m uvicorn relay_server:app --host 0.0.0.0 --port 8080 >> /home/ubuntu/relay/relay.log 2>&1 &
+              nohup .venv/bin/python -m uvicorn relay_server:app --host 0.0.0.0 --port 8080 >> /opt/muraguchi-relay/relay.log 2>&1 &
               sleep 3
               if curl -sf http://localhost:8080/v1/relay/health > /dev/null; then
                 echo "Relay is healthy!"
               else
                 echo "WARNING: Relay may not have started correctly"
-                tail -10 /home/ubuntu/relay/relay.log
+                tail -10 /opt/muraguchi-relay/relay.log
               fi
             fi
