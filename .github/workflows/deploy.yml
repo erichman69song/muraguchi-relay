@@ -20,6 +20,7 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           port: 22
           timeout: 300s
+          envs: OPENAI_API_KEY,GOOGLE_API_KEY
           script: |
             set -e
             cd /opt/muraguchi-relay
@@ -27,6 +28,16 @@ jobs:
             git fetch origin
             git reset --hard origin/main
             echo "Code updated to $(git rev-parse --short HEAD)"
+
+            # Update API keys in .env from GitHub Actions env vars
+            if [ -n "$OPENAI_API_KEY" ]; then
+              echo "Updating OpenAI API key..."
+              sed -i "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY=$OPENAI_API_KEY|" /opt/muraguchi-relay/.env
+            fi
+            if [ -n "$GOOGLE_API_KEY" ]; then
+              echo "Updating Google API key..."
+              sed -i "s|^GOOGLE_API_KEY=.*|GOOGLE_API_KEY=$GOOGLE_API_KEY|" /opt/muraguchi-relay/.env
+            fi
 
             SVC="/etc/systemd/system/muraguchi-relay.service"
             if [ ! -f "$SVC" ]; then
@@ -41,7 +52,7 @@ jobs:
             sudo systemctl restart muraguchi-relay
 
             sleep 4
-            curl -sf http://localhost:8080/v1/relay/health && echo "Relay is healthy!" || {
+            curl -sf http://localhost:8080/v1/relay/health && echo " Relay is healthy!" || {
               echo "Health check FAILED:"
               tail -15 /opt/muraguchi-relay/relay.log
               exit 1
