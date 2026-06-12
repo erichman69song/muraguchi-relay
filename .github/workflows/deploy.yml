@@ -21,28 +21,38 @@ jobs:
           port: 22
           timeout: 300s
           script: |
+            set -e
             cd /opt/muraguchi-relay
             git fetch origin
             git reset --hard origin/main
             echo "Code updated to $(git rev-parse --short HEAD)"
 
-            # Restart relay service
             if systemctl --user is-active muraguchi-relay 2>/dev/null; then
               echo "Restarting via systemd..."
               systemctl --user restart muraguchi-relay
-            else
-              echo "Restarting via pkill + python (venv)..."
-              pkill -f "relay_server:app" || true
-              sleep 1
-              cd /opt/muraguchi-relay
-              nohup .venv/bin/python -m uvicorn relay_server:app --host 0.0.0.0 --port 8080 \
-                >> /opt/muraguchi-relay/relay.log 2>&1 &
-              disown
               sleep 3
               if curl -sf http://localhost:8080/v1/relay/health > /dev/null; then
                 echo "Relay is healthy!"
               else
-                echo "WARNING: Relay may not have started correctly"
+                echo "WARNING: health check failed"
                 tail -10 /opt/muraguchi-relay/relay.log
+                exit 1
+              fi
+            else
+              echo "Restarting via setsid + nohup..."
+              pkill -f "relay_server:app" || true
+              sleep 1
+              setsid sh -c '
+                cd /opt/muraguchi-relay
+                nohup .venv/bin/python -m uvicorn relay_server:app --host 0.0.0.0 --port 8080 \
+                  >> /opt/muraguchi-relay/relay.log 2>&1
+              ' </dev/null >&/dev/null &
+              sleep 4
+              if curl -sf http://localhost:8080/v1/relay/health > /dev/null; then
+                echo "Relay is healthy!"
+              else
+                echo "WARNING: health check failed"
+                tail -10 /opt/muraguchi-relay/relay.log
+                exit 1
               fi
             fi
