@@ -289,8 +289,10 @@ class ImageGenerateRequest(BaseModel):
 
 class ImageGenerateGoogleRequest(BaseModel):
     model: str = Field(default="gemini-3-pro-image-preview")
-    contents: list[dict]  # Google generateContent 格式
-    api_key: Optional[str] = Field(default=None)  # ECS DB 中的 key，通过 body 传入
+    contents: Optional[list[dict]] = Field(default=None, description="旧版 generateContent 格式")
+    input: Optional[list[dict]] = Field(default=None, description="新版 interactions API 格式：{\"type\": \"text\", \"text\": \"...\"}")
+    api_revision: Optional[str] = Field(default=None, description="新版 API revision，如 2026-05-20")
+    api_key: Optional[str] = Field(default=None)
 
     model_config = {"extra": "allow"}
 
@@ -356,49 +358,116 @@ async def relay_google_image(
     x_api_key: Optional[str] = Header(None),
 ):
     """
-    Google Imagen / Gemini Image 代理端点（走 generateContent）。
-    通过 relay 代为转发，EC2 可访问 Google API。
+    Google Gemini Image 代理端点。
+
+    支持两种模式：
+    1. 新版 interactions API（2026 年 6 月后推荐）：模型 gpt-2-image输出等 Nano Banana 系列
+       端点：POST /v1beta/interactions
+       特征：请求 body 含 "input" 字段（字符串数组）
+
+    2. 旧版 generateContent API（已被废弃，仅作兼容）：gemini-3-pro-image-preview 等
+       端点：POST /v1beta/models/{model}:generateContent
+       特征：请求 body 含 "contents" 字段
     """
     _verify_api_key(x_api_key)
 
     if rate_limited := check_rate_limit(request, "google/image"):
         raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
 
-    # 优先用请求 body 中的 api_key（ECS DB 里的 key）
-    # 其次用 relay .env 配置的 key
     request_api_key = getattr(body, "api_key", None) or None
     env_api_key = os.environ.get("GOOGLE_API_KEY", "")
     api_key = request_api_key or env_api_key
     if not api_key:
         raise HTTPException(status_code=502, detail="Google API key 未配置（请求方未传且 relay 未配置）")
 
-    # 从请求 body 中取 model（默认 gemini-3-pro-image-preview）
     model = getattr(body, "model", "gemini-3-pro-image-preview") or "gemini-3-pro-image-preview"
 
-    base_url = "https://generativelanguage.googleapis.com"
-    url = f"{base_url}/v1beta/models/{model}:generateContent"
+    # 判断请求格式：新版 interactions API 用 "input" 字段，旧版 generateContent 用 "contents"
+    has_input = hasattr(body, "input") and body.input is not None
+    has_contents = hasattr(body, "contents") and body.contents is not None
 
-    headers = {
-        "Content-Type": "application/json",
-    }
-    params = {"key": api_key}
+    if has_input:
+        # ── 新版 interactions API ────────────────────────────────────────────────
+        base_url = "https://generativelanguage.googleapis.com"
+        url = f"{base_url}/v1beta/interactions"
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
-        resp = await client.post(
-            url,
-            json={"contents": body.contents},
-            headers=headers,
-            params=params,
-        )
+        google_headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
+        }
+        if hasattr(body, "api_revision") and body.api_revision:
+            google_headers["Api-Revision"] = body.api_revision
 
-    if resp.status_code != 200:
-        try:
-            err_json = resp.json()
-            raise HTTPException(status_code=502, detail=f"Google image error: {err_json}")
-        except Exception:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Google image error HTTP {resp.status_code}: {resp.text[:500]}",
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+            resp = await client.post(
+                url,
+                json={"model": model, "input": body.input},
+                headers=google_headers,
             )
 
-    return resp.json()
+        if resp.status_code != 200:
+            try:
+                err_json = resp.json()
+                raise HTTPException(status_code=502, detail=f"Google image error: {err_json}")
+            except Exception:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Google image error HTTP {resp.status_code}: {resp.text[:500]}",
+                )
+
+        resp_data = resp.json()
+
+        # interactions API 返回格式：{"steps": [{"content": [{"data": "...", "mime_type": "..."}]}]}
+        # 提取第一张图片的 base64 数据并标准化为 generateContent 兼容格式
+        steps = resp_data.get("steps", [])
+        for step in steps:
+            contents = step.get("content", [])
+            for item in contents:
+                if isinstance(item, dict) and item.get("mime_type", "").startswith("image/"):
+                    return {
+                        "candidates": [
+                            {
+                                "content": {
+                                    "parts": [
+                                        {
+                                            "inlineData": {
+                                                "data": item["data"],
+                                                "mimeType": item["mime_type"],
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+
+        # 没找到图片，返回原始响应供调试
+        return resp_data
+
+    elif has_contents:
+        # ── 旧版 generateContent API ────────────────────────────────────────────
+        base_url = "https://generativelanguage.googleapis.com"
+        url = f"{base_url}/v1beta/models/{model}:generateContent"
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+            resp = await client.post(
+                url,
+                json={"contents": body.contents},
+                headers={"Content-Type": "application/json"},
+                params={"key": api_key},
+            )
+
+        if resp.status_code != 200:
+            try:
+                err_json = resp.json()
+                raise HTTPException(status_code=502, detail=f"Google image error: {err_json}")
+            except Exception:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Google image error HTTP {resp.status_code}: {resp.text[:500]}",
+                )
+
+        return resp.json()
+
+    else:
+        raise HTTPException(status_code=400, detail="请求 body 必须包含 input（新版 interactions）或 contents（旧版 generateContent）字段")
