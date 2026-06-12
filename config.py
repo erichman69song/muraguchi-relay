@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     DEEPSEEK_API_KEY: str = ""
     GOOGLE_API_KEY: str = ""
 
+    GOOGLE_API_KEY: str = ""
+
     # Access Control
     ALLOWED_CLIENT_IPS: str = ""
     RELAY_API_KEY: str = ""

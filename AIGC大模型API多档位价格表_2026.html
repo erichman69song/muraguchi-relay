@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIGC 核心模型 API 多档位价格对比 (2026 Q2)</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --surface: #1e293b;
+            --border: #334155;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent: #3b82f6;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text-main);
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+        }
+        h1, h2, h3 { color: #ffffff; }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 16px;
+            font-size: 0.95rem;
+        }
+        th, td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        th {
+            background-color: rgba(255, 255, 255, 0.05);
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            font-size: 0.85rem;
+            letter-spacing: 0.05em;
+        }
+        tr:hover { background-color: rgba(255, 255, 255, 0.02); }
+        .row-group td { border-bottom: none; }
+        .row-sub td { 
+            padding-left: 32px; 
+            color: var(--text-muted); 
+            font-size: 0.9rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .badge-video { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
+        .badge-image { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+        .badge-llm { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+        .badge-tier { background: rgba(255, 255, 255, 0.1); color: #cbd5e1; margin-right: 8px;}
+        .highlight { color: var(--success); font-weight: bold; }
+        .expensive { color: var(--danger); font-weight: bold; }
+        .currency { font-family: monospace; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 核心大模型 API 多档位价格对比 (2026.04)</h1>
+        <p style="color: var(--text-muted);">注：今日最新汇率按 $1 = ¥6.84 计算（已更新各家官网最新接入价）。涵盖了旗舰(Pro/Opus)、中杯(Sonnet/Flash)以及小杯(Mini/Haiku)等不同档位。</p>
+
+        <!-- LLM Pricing Table -->
+        <div class="card">
+            <h2>1. 大语言模型 (LLM) 档位价格</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>模型家族</th>
+                        <th>档位 / 具体型号</th>
+                        <th>计费标准 (USD/MTok)</th>
+                        <th>统一换算 (CNY/MTok)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="row-group">
+                        <td><span class="badge badge-llm">OpenAI</span> <a href="https://platform.openai.com/docs/api-reference" target="_blank" style="color: inherit; text-decoration: none;"><strong>GPT-5 系列 🔗</strong></a></td>
+                        <td><span class="badge badge-tier">旗舰</span> GPT-5.5</td>
+                        <td>$5.00 / $30.00</td>
+                        <td class="expensive">￥34.20 / ￥205.20</td>
+                    </tr>
+                    <tr class="row-sub">
+                        <td></td>
+                        <td><span class="badge badge-tier">标准</span> GPT-5.4 Mini</td>
+                        <td>$0.75 / $4.50</td>
+                        <td>￥5.13 / ￥30.78</td>
+                    </tr>
+                    <tr class="row-sub">
+                        <td></td>
+                        <td><span class="badge badge-tier">轻量</span> GPT-5.4 Nano</td>
+                        <td>$0.20 / $1.25</td>
+                        <td class="highlight">￥1.37 / ￥8.55</td>
+                    </tr>
+
+                    <tr class="row-group">
+                        <td><span class="badge badge-llm">Anthropic</span> <a href="https://docs.anthropic.com/en/api/getting-started" target="_blank" style="color: inherit; text-decoration: none;"><strong>Claude 4 系列 🔗</strong></a></td>
+                        <td><span class="badge badge-tier">旗舰</span> Opus 4.7</td>
+                        <td>$5.00 / $25.00</td>
+                        <td class="expensive">￥34.20 / ￥171.00</td>
+                    </tr>
+                    <tr class="row-sub">
+                        <td></td>
+                        <td><span class="badge badge-tier">标准</span> Sonnet 4.6</td>
+                        <td>$3.00 / $15.00</td>
+                        <td>￥20.52 / ￥102.60</td>
+                    </tr>
+                    <tr class="row-sub">
+                        <td></td>
+                        <td><span class="badge badge-tier">轻量</span> Haiku 4.5</td>
+                        <td>$1.00 / $5.00</td>
+                        <td>￥6.84 / ￥34.20</td>
+                    </tr>
+
+                    <tr class="row-group">
+                        <td><span class="badge badge-llm">Google</span> <strong>Gemini 3 系列</strong></td>
+                        <td><span class="badge badge-tier">旗舰</span> Gemini 3.1 Pro</td>
+                        <td>$2.00 / $12.00</td>
+                        <td>￥13.68 / ￥82.08</td>
+                    </tr>
+                    <tr class="row-sub">
+                        <td></td>
+                        <td><span class="badge badge-tier">标准</span> Gemini 3.1 Flash</td>
+                        <td>$0.25 / $1.50</td>
+                        <td>￥1.71 / ￥10.26</td>
+                    </tr>
+
+                    <tr class="row-group">
+                        <td><span class="badge badge-llm">DeepSeek</span> <a href="https://api-docs.deepseek.com/" target="_blank" style="color: inherit; text-decoration: none;"><strong>V4 🔗</strong></a></td>
+                        <td><span class="badge badge-tier">全能</span> DeepSeek V4 (开启思考)</td>
+                        <td>$0.30 / $0.50</td>
+                        <td class="highlight">￥2.05 / ￥3.42</td>
+                    </tr>
+                    
+                    <tr class="row-group">
+                        <td><span class="badge badge-llm">Moonshot</span> <a href="https://platform.moonshot.ai/docs" target="_blank" style="color: inherit; text-decoration: none;"><strong>Kimi K2.6 🔗</strong></a></td>
+                        <td><span class="badge badge-tier">超长</span> Kimi K2.6 (256K)</td>
+                        <td>$0.74 / $4.65</td>
+                        <td>￥5.06 / ￥31.81</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Video & Image Pricing Table -->
+        <div class="card">
+            <h2>2. 视频与图像大模型 (多模态) 档位价格</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>类型</th>
+                        <th>模型名称</th>
+                        <th>档位 / 模式</th>
+                        <th>预估价格 (CNY)</th>
+                        <th>备注</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- Kling -->
+                    <tr class="row-group">
+                        <td><span class="badge badge-video">视频</span></td>
+                        <td><a href="https://klingai.com/global/dev/document-api" target="_blank" style="color: inherit; text-decoration: none;"><strong>Kling 3.0 🔗</strong></a></td>
+                        <td><span class="badge badge-tier">Pro/4K</span> 旗舰高动态</td>
+                        <td class="expensive">约 ￥0.76 - ￥0.95 / 秒</td>
+                        <td>支持复杂物理运动、运动笔刷控制</td>
+                    </tr>
+                    <tr class="row-sub">
+                        <td></td>
+                        <td></td>
+                        <td><span class="badge badge-tier">Standard</span> 标准 1080p</td>
+                        <td>约 ￥0.24 / 秒</td>
+                        <td>适合大规模垫图盲盒、测试运镜</td>
+                    </tr>
+
+                    <!-- Seedance -->
+                    <tr class="row-group">
+                        <td><span class="badge badge-video">视频</span></td>
+                        <td><strong>Seedance 2.0</strong></td>
+                        <td><span class="badge badge-tier">2K/原生音画</span> 旗舰调用</td>
+                        <td class="expensive">约 ￥0.95 / 秒</td>
+                        <td>消耗极高 Token，音画同步效果最好</td>
+                    </tr>
+                    
+                    <!-- Runway -->
+                    <tr class="row-group">
+                        <td><span class="badge badge-video">视频</span></td>
+                        <td><a href="https://docs.dev.runwayml.com/" target="_blank" style="color: inherit; text-decoration: none;"><strong>Runway Gen-3 🔗</strong></a></td>
+                        <td><span class="badge badge-tier">Alpha</span> 高清渲染模式</td>
+                        <td class="expensive">约 ￥1.09 / 秒</td>
+                        <td>质感细腻，慢速生成</td>
+                    </tr>
+                    <tr class="row-sub">
+                        <td></td>
+                        <td></td>
+                        <td><span class="badge badge-tier">Turbo</span> 极速出片模式</td>
+                        <td>约 ￥0.27 / 秒</td>
+                        <td>成本低至原版 1/4，风格化较强</td>
+                    </tr>
+
+                    <!-- Flux -->
+                    <tr class="row-group">
+                        <td><span class="badge badge-image">图像</span></td>
+                        <td><a href="https://docs.bfl.ml/" target="_blank" style="color: inherit; text-decoration: none;"><strong>Flux.1 🔗</strong></a></td>
+                        <td><span class="badge badge-tier">Pro</span> 专业版</td>
+                        <td>￥0.34 / 张</td>
+                        <td>极高清晰度与出图成功率</td>
+                    </tr>
+                    <tr class="row-sub">
+                        <td></td>
+                        <td></td>
+                        <td><span class="badge badge-tier">Schnell</span> 极速版</td>
+                        <td class="highlight">￥0.02 / 张</td>
+                        <td>1-4步极速出图，成本白菜价</td>
+                    </tr>
+
+                    <!-- Nano Banana Pro -->
+                    <tr class="row-group">
+                        <td><span class="badge badge-image">图像</span></td>
+                        <td><strong>Nano Banana Pro</strong></td>
+                        <td><span class="badge badge-tier">4K</span> 超高清 (官方价)</td>
+                        <td class="expensive">￥1.64 / 张</td>
+                        <td>$0.24 / 张，极致质感与细节</td>
+                    </tr>
+                    <tr class="row-sub">
+                        <td></td>
+                        <td></td>
+                        <td><span class="badge badge-tier">1K/2K</span> 高清 (官方价)</td>
+                        <td>￥0.92 / 张</td>
+                        <td>$0.134 / 张，常规商用跑图</td>
+                    </tr>
+                    
+                    <!-- GPT Image -->
+                    <tr class="row-group">
+                        <td><span class="badge badge-image">图像</span></td>
+                        <td><a href="https://platform.openai.com/docs/api-reference/images" target="_blank" style="color: inherit; text-decoration: none;"><strong>GPT Image 2 🔗</strong></a></td>
+                        <td><span class="badge badge-tier">High</span> 高质量 (1024x1024)</td>
+                        <td class="expensive">￥1.44 / 张</td>
+                        <td>$0.211 / 张，顶级排版与语义理解</td>
+                    </tr>
+                    <tr class="row-sub">
+                        <td></td>
+                        <td></td>
+                        <td><span class="badge badge-tier">Medium</span> 中质量 (1024x1024)</td>
+                        <td>￥0.36 / 张</td>
+                        <td>$0.053 / 张，常规绘图需求</td>
+                    </tr>
+                    <tr class="row-sub">
+                        <td></td>
+                        <td></td>
+                        <td><span class="badge badge-tier">Low</span> 低质量 (1024x1024)</td>
+                        <td class="highlight">￥0.04 / 张</td>
+                        <td>$0.006 / 张，极速低成本生成</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>
