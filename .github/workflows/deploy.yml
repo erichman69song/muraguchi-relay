@@ -20,9 +20,7 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           port: 22
           timeout: 300s
-          command_timeout: 5m
           script: |
-            export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
             cd /opt/muraguchi-relay
             git fetch origin
             git reset --hard origin/main
@@ -36,7 +34,10 @@ jobs:
               echo "Restarting via pkill + python (venv)..."
               pkill -f "relay_server:app" || true
               sleep 1
-              nohup .venv/bin/python -m uvicorn relay_server:app --host 0.0.0.0 --port 8080 >> /opt/muraguchi-relay/relay.log 2>&1 &
+              cd /opt/muraguchi-relay
+              nohup .venv/bin/python -m uvicorn relay_server:app --host 0.0.0.0 --port 8080 \
+                >> /opt/muraguchi-relay/relay.log 2>&1 &
+              disown
               sleep 3
               if curl -sf http://localhost:8080/v1/relay/health > /dev/null; then
                 echo "Relay is healthy!"
