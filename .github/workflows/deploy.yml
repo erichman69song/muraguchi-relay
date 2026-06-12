@@ -23,36 +23,46 @@ jobs:
           script: |
             set -e
             cd /opt/muraguchi-relay
+
+            # Pull latest code
             git fetch origin
             git reset --hard origin/main
             echo "Code updated to $(git rev-parse --short HEAD)"
 
-            if systemctl --user is-active muraguchi-relay 2>/dev/null; then
-              echo "Restarting via systemd..."
-              systemctl --user restart muraguchi-relay
-              sleep 3
-              if curl -sf http://localhost:8080/v1/relay/health > /dev/null; then
-                echo "Relay is healthy!"
-              else
-                echo "WARNING: health check failed"
-                tail -10 /opt/muraguchi-relay/relay.log
-                exit 1
-              fi
-            else
-              echo "Restarting via setsid + nohup..."
-              pkill -f "relay_server:app" || true
-              sleep 1
-              setsid sh -c '
-                cd /opt/muraguchi-relay
-                nohup .venv/bin/python -m uvicorn relay_server:app --host 0.0.0.0 --port 8080 \
-                  >> /opt/muraguchi-relay/relay.log 2>&1
-              ' </dev/null >&/dev/null &
-              sleep 4
-              if curl -sf http://localhost:8080/v1/relay/health > /dev/null; then
-                echo "Relay is healthy!"
-              else
-                echo "WARNING: health check failed"
-                tail -10 /opt/muraguchi-relay/relay.log
-                exit 1
-              fi
+            # Ensure systemd service exists (idempotent)
+            SERVICE_FILE="/etc/systemd/system/muraguchi-relay.service"
+            if [ ! -f "$SERVICE_FILE" ]; then
+              echo "Creating systemd service file..."
+              cat << 'SVCEOF' | sudo tee "$SERVICE_FILE" > /dev/null
+[Unit]
+Description=Muraguchi Relay Service
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/muraguchi-relay
+ExecStart=/opt/muraguchi-relay/.venv/bin/python -m uvicorn relay_server:app --host 0.0.0.0 --port 8080
+Restart=always
+RestartSec=3
+StandardOutput=append:/opt/muraguchi-relay/relay.log
+StandardError=append:/opt/muraguchi-relay/relay.log
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+              sudo systemctl daemon-reload
+              sudo systemctl enable muraguchi-relay
             fi
+
+            # Graceful restart via systemd
+            echo "Restarting relay via systemd..."
+            sudo systemctl restart muraguchi-relay
+
+            # Wait and verify
+            sleep 4
+            curl -sf http://localhost:8080/v1/relay/health && echo "Relay is healthy!" || {
+              echo "Health check FAILED:"
+              tail -15 /opt/muraguchi-relay/relay.log
+              exit 1
+            }
