@@ -24,42 +24,22 @@ jobs:
             set -e
             cd /opt/muraguchi-relay
 
-            # Pull latest code
             git fetch origin
             git reset --hard origin/main
             echo "Code updated to $(git rev-parse --short HEAD)"
 
-            # Ensure systemd service exists (idempotent)
-            SERVICE_FILE="/etc/systemd/system/muraguchi-relay.service"
-            if [ ! -f "$SERVICE_FILE" ]; then
+            SVC="/etc/systemd/system/muraguchi-relay.service"
+            if [ ! -f "$SVC" ]; then
               echo "Creating systemd service file..."
-              cat << 'SVCEOF' | sudo tee "$SERVICE_FILE" > /dev/null
-[Unit]
-Description=Muraguchi Relay Service
-After=network.target
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/opt/muraguchi-relay
-ExecStart=/opt/muraguchi-relay/.venv/bin/python -m uvicorn relay_server:app --host 0.0.0.0 --port 8080
-Restart=always
-RestartSec=3
-StandardOutput=append:/opt/muraguchi-relay/relay.log
-StandardError=append:/opt/muraguchi-relay/relay.log
-
-[Install]
-WantedBy=multi-user.target
-SVCEOF
+              printf '[Unit]\nDescription=Muraguchi Relay Service\nAfter=network.target\n\n[Service]\nType=simple\nUser=ubuntu\nWorkingDirectory=/opt/muraguchi-relay\nExecStart=/opt/muraguchi-relay/.venv/bin/python -m uvicorn relay_server:app --host 0.0.0.0 --port 8080\nRestart=always\nRestartSec=3\nStandardOutput=append:/opt/muraguchi-relay/relay.log\nStandardError=append:/opt/muraguchi-relay/relay.log\n\n[Install]\nWantedBy=multi-user.target\n' | sudo tee "$SVC" > /dev/null
+              sudo chmod 644 "$SVC"
               sudo systemctl daemon-reload
               sudo systemctl enable muraguchi-relay
             fi
 
-            # Graceful restart via systemd
             echo "Restarting relay via systemd..."
             sudo systemctl restart muraguchi-relay
 
-            # Wait and verify
             sleep 4
             curl -sf http://localhost:8080/v1/relay/health && echo "Relay is healthy!" || {
               echo "Health check FAILED:"
