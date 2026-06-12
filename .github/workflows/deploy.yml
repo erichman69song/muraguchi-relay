@@ -19,7 +19,8 @@ jobs:
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
           port: 22
-          timeout: 120s
+          timeout: 300s
+          command_timeout: 5m
           script: |
             export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no"
             cd /opt/muraguchi-relay
