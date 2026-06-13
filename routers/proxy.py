@@ -1,10 +1,13 @@
 import logging
 import os
+import uuid
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from enum import Enum
 from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Request, HTTPException, Header
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from config import settings
@@ -12,8 +15,100 @@ from services.router import route_chat_completion, infer_provider, RouterError, 
 from services.rate_limit import check_rate_limit
 
 log = logging.getLogger("proxy")
-
 router = APIRouter(prefix="/v1/relay", tags=["relay"])
+
+# ── Async Job Store ──────────────────────────────────────────────────────────
+_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="img_gen_")
+
+
+class JobStatus(str, Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ImageJob:
+    def __init__(self, job_id: str):
+        self.job_id = job_id
+        self.status = JobStatus.PENDING
+        self.result: Optional[dict] = None
+        self.error: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "job_id": self.job_id,
+            "status": self.status.value,
+            "result": self.result,
+            "error": self.error,
+        }
+
+
+# In-memory job store (survives within a single relay process)
+_jobs: dict[str, ImageJob] = {}
+_jobs_lock = asyncio.Lock()
+
+
+def _cleanup_old_jobs(max_age_seconds: int = 3600):
+    """Remove jobs older than max_age_seconds."""
+    import time
+    now = time.time()
+    expired = []
+    for jid in list(_jobs.keys()):
+        parts = jid.split("_")
+        # job_id format: img_{timestamp_ms}_{uuid}
+        if len(parts) >= 2:
+            try:
+                ts = float(parts[1]) / 1000  # ms → seconds
+                if now - ts > max_age_seconds:
+                    expired.append(jid)
+            except ValueError:
+                pass
+    for jid in expired:
+        _jobs.pop(jid, None)
+
+
+async def _run_openai_image(job_id: str, api_key: str, payload: dict):
+    """后台线程池执行 OpenAI image 生成。"""
+    import httpx as _hx
+    from services.router import PROVIDER_BASE_URLS as _PBU
+
+    async with _jobs_lock:
+        if job_id not in _jobs:
+            return
+        _jobs[job_id].status = JobStatus.PROCESSING
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    try:
+        with _hx.Client(timeout=_hx.Timeout(300.0)) as client:
+            resp = client.post(
+                f"{_PBU['openai']}/images/generations",
+                json=payload,
+                headers=headers,
+            )
+        if resp.status_code != 200:
+            error_detail = f"OpenAI image error HTTP {resp.status_code}: {resp.text[:500]}"
+            async with _jobs_lock:
+                if job_id in _jobs:
+                    _jobs[job_id].status = JobStatus.FAILED
+                    _jobs[job_id].error = error_detail
+            log.error(f"[relay_openai_image] job={job_id} failed: {error_detail}")
+            return
+        result = resp.json()
+        async with _jobs_lock:
+            if job_id in _jobs:
+                _jobs[job_id].result = result
+                _jobs[job_id].status = JobStatus.COMPLETED
+        log.info(f"[relay_openai_image] job={job_id} completed")
+    except Exception as e:
+        async with _jobs_lock:
+            if job_id in _jobs:
+                _jobs[job_id].status = JobStatus.FAILED
+                _jobs[job_id].error = str(e)
+        log.error(f"[relay_openai_image] job={job_id} exception: {e}")
 
 
 def _verify_api_key(x_api_key: Optional[str] = Header(None)) -> None:
@@ -28,11 +123,11 @@ def _verify_api_key(x_api_key: Optional[str] = Header(None)) -> None:
 
 class ChatCompletionRequest(BaseModel):
     provider: str = Field(..., description="vertex | openai | anthropic | deepseek")
-    model: str = Field(..., description="模型名称，如 gemini-3.1-pro-preview")
+    model: str = Field(..., description="模型名称")
     api_key: Optional[str] = Field(None, description="provider API key（ECS 请求方传入，优先使用）")
     project_id: Optional[str] = Field(None, description="Vertex AI 必需：GCP 项目 ID")
-    location: str = Field("us-central1", description="区域，默认 us-central1")
-    messages: list[dict] = Field(..., description="OpenAI 格式消息列表")
+    location: str = Field("us-central1")
+    messages: list[dict] = Field(...)
     temperature: Optional[float] = Field(0.7, ge=0, le=2)
     max_tokens: Optional[int] = Field(4096, ge=1, le=32768)
     top_p: Optional[float] = Field(None, ge=0, le=1)
@@ -55,19 +150,6 @@ async def relay_chat_completions(
     body: ChatCompletionRequest,
     x_api_key: Optional[str] = Header(None),
 ):
-    """
-    统一聊天补全代理端点。
-
-    请求示例（Vertex AI）:
-    ```json
-    {
-      "provider": "vertex",
-      "model": "gemini-3.1-pro-preview",
-      "project_id": "gen-lang-client-0568442340",
-      "messages": [{"role": "user", "content": "Hello!"}]
-    }
-    ```
-    """
     _verify_api_key(x_api_key)
 
     if rate_limited := check_rate_limit(request, "chat/completions"):
@@ -110,14 +192,10 @@ async def relay_embeddings(
     body: EmbeddingsRequest,
     x_api_key: Optional[str] = Header(None),
 ):
-    """向量嵌入代理端点（目前仅透传 OpenAI 兼容接口）。"""
     _verify_api_key(x_api_key)
 
     if rate_limited := check_rate_limit(request, "embeddings"):
         raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
-
-    import httpx
-    from services.router import PROVIDER_BASE_URLS, _get_api_key
 
     base_url = PROVIDER_BASE_URLS.get(body.provider)
     if not base_url:
@@ -150,7 +228,6 @@ async def relay_embeddings(
 async def list_models(
     x_api_key: Optional[str] = Header(None),
 ):
-    """查询可用模型列表。"""
     _verify_api_key(x_api_key)
     return {
         "object": "list",
@@ -168,7 +245,6 @@ async def list_models(
 
 @router.get("/health")
 async def health_check():
-    """健康检查端点。"""
     return {"status": "ok", "service": "muraguchi-relay"}
 
 
@@ -177,7 +253,6 @@ async def validate_project(
     project_id: str,
     x_api_key: Optional[str] = Header(None),
 ):
-    """验证 project_id 是否在白名单中。"""
     _verify_api_key(x_api_key)
     from services.vertex_auth import validate_project_id
     allowed = validate_project_id(project_id)
@@ -187,17 +262,11 @@ async def validate_project(
 # ── RSS / HTTP Fetch 代理 ───────────────────────────────────────────────────────
 
 class FetchRequest(BaseModel):
-    url: str = Field(..., description="要抓取的 URL")
-    method: str = Field("GET", description="HTTP 方法: GET | POST | PUT | DELETE")
-    timeout: int = Field(30, ge=5, le=120, description="超时秒数，默认30秒")
-    headers: Optional[dict[str, str]] = Field(
-        default=None,
-        description="可选的额外请求头",
-    )
-    body: Optional[str | dict] = Field(
-        default=None,
-        description="请求体，字符串或 dict（用于 POST/PUT）",
-    )
+    url: str = Field(...)
+    method: str = Field("GET")
+    timeout: int = Field(30, ge=5, le=120)
+    headers: Optional[dict[str, str]] = Field(default=None)
+    body: Optional[str | dict] = Field(default=None)
 
 
 class FetchResponse(BaseModel):
@@ -213,29 +282,6 @@ async def relay_fetch(
     body: FetchRequest,
     x_api_key: Optional[str] = Header(None),
 ):
-    """
-    HTTP GET 代理端点，供 ECS 抓取外网 RSS 源使用。
-    EC2 可以访问外网，承担所有出站 HTTP 请求。
-
-    请求示例：
-    ```json
-    {
-      "url": "https://nitter.net/karpathy/rss",
-      "timeout": 15,
-      "headers": {"User-Agent": "Mozilla/5.0 ..."}
-    }
-    ```
-
-    响应示例：
-    ```json
-    {
-      "url": "https://nitter.net/karpathy/rss",
-      "status": 200,
-      "content": "<?xml ...",
-      "error": null
-    }
-    ```
-    """
     _verify_api_key(x_api_key)
 
     if rate_limited := check_rate_limit(request, "fetch"):
@@ -243,9 +289,7 @@ async def relay_fetch(
 
     headers = body.headers or {}
     if "User-Agent" not in headers:
-        headers["User-Agent"] = headers.get(
-            "User-Agent", "Mozilla/5.0 (compatible; AI-Daily/1.0)"
-        )
+        headers["User-Agent"] = "Mozilla/5.0 (compatible; AI-Daily/1.0)"
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(body.timeout)) as client:
@@ -265,90 +309,110 @@ async def relay_fetch(
             error=None,
         )
     except httpx.TimeoutException:
-        log.warning(f"[relay_fetch] 超时 {body.url}")
         return FetchResponse(url=body.url, status=0, content="", error="timeout")
     except httpx.RequestError as e:
-        log.warning(f"[relay_fetch] 请求错误 {body.url}: {e}")
         return FetchResponse(url=body.url, status=0, content="", error=str(e))
     except Exception as e:
-        log.error(f"[relay_fetch] 未知错误 {body.url}: {e}")
         return FetchResponse(url=body.url, status=0, content="", error=str(e))
 
 
-# ── 图片生成专用代理 ────────────────────────────────────────────────────────────
+# ── 图片生成：异步 Job 模式 ───────────────────────────────────────────────────
 
 class ImageGenerateRequest(BaseModel):
     model: str
     prompt: str
     n: int = Field(default=1, ge=1, le=10)
     size: str = Field(default="1024x1024")
-    api_key: Optional[str] = Field(default=None)  # ECS DB 中的 key，通过 body 传入
-
-    model_config = {"extra": "allow"}
-
-
-class ImageGenerateGoogleRequest(BaseModel):
-    model: str = Field(default="gemini-3-pro-image-preview")
-    contents: Optional[list[dict]] = Field(default=None, description="旧版 generateContent 格式")
-    input: Optional[list[dict]] = Field(default=None, description="新版 interactions API 格式：{\"type\": \"text\", \"text\": \"...\"}")
-    api_revision: Optional[str] = Field(default=None, description="新版 API revision，如 2026-05-20")
     api_key: Optional[str] = Field(default=None)
+    style: Optional[str] = Field(default=None)
 
     model_config = {"extra": "allow"}
+
+
+class ImageJobResponse(BaseModel):
+    job_id: str
+    status: str
+    result: Optional[dict] = None
+    error: Optional[str] = None
 
 
 @router.post("/openai/image", response_model=dict)
-async def relay_openai_image(
+async def relay_openai_image_submit(
     request: Request,
     body: ImageGenerateRequest,
     x_api_key: Optional[str] = Header(None),
 ):
     """
-    OpenAI / GPT-Image 代理端点（走 /v1/images/generations）。
-    通过 relay 代为转发，EC2 可访问 OpenAI API。
+    OpenAI / GPT-Image 代理端点 — 异步 Job 模式。
+    立即返回 job_id，后台线程池执行 OpenAI 调用。
+    ECS 通过 GET /v1/relay/openai/image/{job_id} 轮询结果。
     """
     _verify_api_key(x_api_key)
 
     if rate_limited := check_rate_limit(request, "openai/image"):
         raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
 
-    # 优先用请求 body 中的 api_key（ECS DB 里的 key）
-    # 其次用 relay .env 配置的 key
     request_api_key = getattr(body, "api_key", None) or None
     api_key = _get_api_key("openai", request_api_key)
     if not api_key:
-        raise HTTPException(status_code=502, detail="OpenAI API key 未配置（请求方未传且 relay 未配置）")
+        raise HTTPException(status_code=502, detail="OpenAI API key 未配置")
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    import time
+    job_id = f"img_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+    job = ImageJob(job_id)
+    async with _jobs_lock:
+        _jobs[job_id] = job
+    _cleanup_old_jobs()
+
     payload = {
         "model": body.model,
         "prompt": body.prompt,
         "n": body.n,
         "size": body.size,
     }
+    if getattr(body, "style", None):
+        payload["style"] = body.style
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
-        resp = await client.post(
-            f"{PROVIDER_BASE_URLS['openai']}/images/generations",
-            json=payload,
-            headers=headers,
-        )
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(_executor, lambda: asyncio.run(_run_openai_image(job_id, api_key, payload)))
 
-    if resp.status_code != 200:
-        # 返回原始错误 body（可能是 JSON 或纯文本）
-        try:
-            err_json = resp.json()
-            raise HTTPException(status_code=502, detail=f"OpenAI image error: {err_json}")
-        except Exception:
-            raise HTTPException(
-                status_code=502,
-                detail=f"OpenAI image error HTTP {resp.status_code}: {resp.text[:500]}",
-            )
+    log.info(f"[relay_openai_image] submitted job={job_id} model={body.model} n={body.n}")
+    return {
+        "job_id": job_id,
+        "status": "pending",
+        "message": "Job 已提交，请通过 GET /v1/relay/openai/image/{job_id} 轮询结果",
+    }
 
-    return resp.json()
+
+@router.get("/openai/image/{job_id}", response_model=ImageJobResponse)
+async def relay_openai_image_status(
+    job_id: str,
+    x_api_key: Optional[str] = Header(None),
+):
+    """
+    轮询 OpenAI image job 状态。
+    """
+    _verify_api_key(x_api_key)
+
+    async with _jobs_lock:
+        job = _jobs.get(job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} 不存在或已过期")
+
+    return job.to_dict()
+
+
+# ── Google Image 代理（保持原有逻辑） ───────────────────────────────────────
+
+class ImageGenerateGoogleRequest(BaseModel):
+    model: str = Field(default="gemini-3-pro-image-preview")
+    contents: Optional[list[dict]] = Field(default=None)
+    input: Optional[list[dict]] = Field(default=None)
+    api_revision: Optional[str] = Field(default=None)
+    api_key: Optional[str] = Field(default=None)
+
+    model_config = {"extra": "allow"}
 
 
 @router.post("/google/image", response_model=dict)
@@ -357,18 +421,6 @@ async def relay_google_image(
     body: ImageGenerateGoogleRequest,
     x_api_key: Optional[str] = Header(None),
 ):
-    """
-    Google Gemini Image 代理端点。
-
-    支持两种模式：
-    1. 新版 interactions API（2026 年 6 月后推荐）：模型 gpt-2-image输出等 Nano Banana 系列
-       端点：POST /v1beta/interactions
-       特征：请求 body 含 "input" 字段（字符串数组）
-
-    2. 旧版 generateContent API（已被废弃，仅作兼容）：gemini-3-pro-image-preview 等
-       端点：POST /v1beta/models/{model}:generateContent
-       特征：请求 body 含 "contents" 字段
-    """
     _verify_api_key(x_api_key)
 
     if rate_limited := check_rate_limit(request, "google/image"):
@@ -378,16 +430,14 @@ async def relay_google_image(
     env_api_key = os.environ.get("GOOGLE_API_KEY", "")
     api_key = request_api_key or env_api_key
     if not api_key:
-        raise HTTPException(status_code=502, detail="Google API key 未配置（请求方未传且 relay 未配置）")
+        raise HTTPException(status_code=502, detail="Google API key 未配置")
 
     model = getattr(body, "model", "gemini-3-pro-image-preview") or "gemini-3-pro-image-preview"
 
-    # 判断请求格式：新版 interactions API 用 "input" 字段，旧版 generateContent 用 "contents"
     has_input = hasattr(body, "input") and body.input is not None
     has_contents = hasattr(body, "contents") and body.contents is not None
 
     if has_input:
-        # ── 新版 interactions API ────────────────────────────────────────────────
         base_url = "https://generativelanguage.googleapis.com"
         url = f"{base_url}/v1beta/interactions"
 
@@ -416,9 +466,6 @@ async def relay_google_image(
                 )
 
         resp_data = resp.json()
-
-        # interactions API 返回格式：{"steps": [{"content": [{"data": "...", "mime_type": "..."}]}]}
-        # 提取第一张图片的 base64 数据并标准化为 generateContent 兼容格式
         steps = resp_data.get("steps", [])
         for step in steps:
             contents = step.get("content", [])
@@ -440,12 +487,9 @@ async def relay_google_image(
                             }
                         ]
                     }
-
-        # 没找到图片，返回原始响应供调试
         return resp_data
 
     elif has_contents:
-        # ── 旧版 generateContent API ────────────────────────────────────────────
         base_url = "https://generativelanguage.googleapis.com"
         url = f"{base_url}/v1beta/models/{model}:generateContent"
 
@@ -470,4 +514,4 @@ async def relay_google_image(
         return resp.json()
 
     else:
-        raise HTTPException(status_code=400, detail="请求 body 必须包含 input（新版 interactions）或 contents（旧版 generateContent）字段")
+        raise HTTPException(status_code=400, detail="请求 body 必须包含 input 或 contents 字段")
